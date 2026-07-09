@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: kozan-ictihat-entegresi-kie
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true

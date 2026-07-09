@@ -10,9 +10,7 @@ pinned: false
 
 # Kozan İçtihat Entegresi (KİE)
 
-Türk hukuku içtihat ve karar arama MCP sunucusu. Açık kaynak
-[yargi-mcp](https://github.com/saidsurucu/yargi-mcp) (MIT lisansı, Said Sürücü)
-projesinin Kozan Hukuk için özelleştirilmiş kopyasıdır.
+Kozan Hukuk için geliştirilmiş Türk hukuku içtihat ve karar arama MCP sunucusu.
 
 ## Kapsanan veri kaynakları
 
@@ -25,12 +23,10 @@ Sigorta Tahkim Komisyonu, Uyuşmazlık Mahkemesi, Bedesten birleşik arama.
 Ayarlar → Connectors → "Add custom connector":
 
 - **İsim:** Kozan İçtihat Entegresi (KİE)
-- **URL:** `https://KULLANICI-ADI-kie.hf.space/mcp/`
+- **URL:** `https://kozan-ictihat-entegresi-kie.onrender.com/mcp/`
 
 ## Uç noktalar
 
 - `/mcp/` — MCP (Streamable HTTP)
 - `/health` — sağlık kontrolü
 - `/status` — durum
-
-Orijinal belgeler için `README_orijinal_yargi-mcp.md` dosyasına bakın.
