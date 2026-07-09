@@ -50,7 +50,7 @@ class GibApiClient:
                 "Accept": "application/json",
                 "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.7",
                 "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (compatible; yargi-mcp/1.0; +https://github.com/saidsurucu/yargi-mcp)",
+                "User-Agent": "Mozilla/5.0 (compatible; kie/1.0)",
             },
             timeout=request_timeout,
             verify=True,
