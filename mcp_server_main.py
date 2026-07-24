@@ -18,6 +18,7 @@ import atexit
 import logging
 import httpx
 import json
+import re
 import time
 from collections import defaultdict
 from pydantic import HttpUrl, Field
@@ -1055,16 +1056,20 @@ async def get_rekabet_kurumu_document(
 )
 async def search_bedesten_unified(
     ctx: Context,
-    phrase: str = Field(..., description="""Search query in Turkish. SUPPORTED OPERATORS:
-• Simple: "mülkiyet hakkı" (finds both words)
-• Exact phrase: "\"mülkiyet hakkı\"" (finds exact phrase)  
-• Required term: "+mülkiyet hakkı" (must contain mülkiyet)
-• Exclude term: "mülkiyet -kira" (contains mülkiyet but not kira)
-• Boolean AND: "mülkiyet AND hak" (both terms required)
-• Boolean OR: "mülkiyet OR tapu" (either term acceptable)
-• Boolean NOT: "mülkiyet NOT satış" (contains mülkiyet but not satış)
-NOTE: Wildcards (*,?), regex patterns (/regex/), fuzzy search (~), and proximity search are NOT supported.
-For best results, use exact phrases with quotes for legal terms."""),
+    phrase: str = Field(..., description="""Search query in Turkish.
+ENGINE BEHAVIOR (measured 2026-07-24):
+• Space-separated terms are matched OR-like by the upstream engine. This server therefore
+  AUTO-PREFIXES every token with '+' (required/AND) when the query contains no operator.
+• To control matching yourself, prefix EVERY term/phrase with '+':
+  e.g. +"169/a" +kesinleşme +tazminat  → only decisions containing all three.
+• Quoted multi-word strings act as phrase units: +"tazminat ve para cezası".
+• Exclude with -term. Do NOT wrap the whole query in doubled quotes ("" ""), it breaks
+  parsing and explodes results.
+• Turkish stemming is applied: kesinleşme/kesinleşmesi/kesinleşmeden match the same stem;
+  suffix-level targeting is not possible.
+• Results are sorted by decision date (newest first), NOT relevance — narrow the query
+  with +terms, birimAdi and date ranges instead of relying on ranking.
+NOTE: Wildcards (*,?), regex, fuzzy (~) and proximity search are NOT supported."""),
     court_types: List[BedestenCourtTypeEnum] = Field(
         default=["YARGITAYKARARI", "DANISTAYKARAR"], 
         description="Court types: YARGITAYKARARI, DANISTAYKARAR, YERELHUKUK, ISTINAFHUKUK, KYB"
@@ -1094,6 +1099,29 @@ For best results, use exact phrases with quotes for legal terms."""),
         # Convert simple date format to ISO 8601 with timezone
         if 'T' not in kararTarihiEnd:
             kararTarihiEnd = f"{kararTarihiEnd}T23:59:59.999Z"
+
+    # --- FIX 1 (2026-07-24): Bedesten veri setinde karar tarihi bozuk kayitlar var
+    # (or. 21.09.6006, 17.06.2913, 15.02.2207 gibi yil hatalari). Sonuclar
+    # KARAR_TARIHI desc siralandigi icin bu "gelecek tarihli" kayitlar her aramada
+    # 1. sayfaya sabitleniyor. Cagiran acikca bitis tarihi vermediyse bugune tavan koy.
+    if not kararTarihiEnd:
+        from datetime import datetime, timezone as _tz
+        kararTarihiEnd = datetime.now(_tz.utc).strftime("%Y-%m-%dT23:59:59.999Z")
+
+    # --- FIX 2 (2026-07-24): Bedesten, boslukla ayrilan terimleri OR gibi esliyor;
+    # operatorsuz cok kelimeli sorgular on binlerce gevsek eslesme dondurup tarih
+    # siralamasiyla ilk sayfayi genel guncel kararlarla dolduruyor. Cagiran hicbir
+    # operator (+ - AND OR NOT) kullanmadiysa tum terimleri +'la zorunlu kil (AND).
+    # Tirnakli ifadeler tek token olarak korunur.
+    def _bedesten_auto_and(p: str) -> str:
+        if any(op in p for op in ('+', ' -', ' AND ', ' OR ', ' NOT ')) or p.startswith('-'):
+            return p
+        tokens = re.findall(r'"[^"]+"|\S+', p)
+        if len(tokens) <= 1:
+            return p
+        return ' '.join('+' + t for t in tokens)
+
+    phrase = _bedesten_auto_and(phrase)
     
     search_data = BedestenSearchData(
         pageSize=pageSize,
