@@ -105,6 +105,10 @@ class BedestenApiClient:
     _DEFAULT_CAPACITY = int(os.getenv("BEDESTEN_RATE_CAPACITY", "1"))
     _DEFAULT_REFILL_S = float(os.getenv("BEDESTEN_RATE_REFILL_S", "3.5"))
     _DEFAULT_MAX_WAIT_S = float(os.getenv("BEDESTEN_RATE_MAX_WAIT_S", "8.0"))
+    # 429'da sunucu kendisi bekler ve EN ÇOK BİR KEZ yeniden dener (09.11.2026):
+    # bekleme süresi (Retry-After ya da yerel kova) bu sınırı aşarsa yeniden denenmez,
+    # yapılandırılmış 429 cevabı eskisi gibi çağırana döner.
+    _RETRY_MAX_S = float(os.getenv("BEDESTEN_RETRY_MAX_S", "8.0"))
 
     def __init__(self, request_timeout: float = 60.0):
         self.http_client = httpx.AsyncClient(
@@ -127,6 +131,38 @@ class BedestenApiClient:
             capacity=self._DEFAULT_CAPACITY,
             refill_per_s=1.0 / self._DEFAULT_REFILL_S,
         )
+
+    @staticmethod
+    def _retry_after_saniye(response: httpx.Response) -> Optional[float]:
+        """Retry-After başlığını saniyeye çevirir; yoksa ya da okunamazsa None."""
+        try:
+            return float(response.headers.get("Retry-After", ""))
+        except (TypeError, ValueError):
+            return None
+
+    async def _istek_gonder(self, endpoint: str, govde: dict, op: str) -> httpx.Response:
+        """Kovadan izin alıp POST eder. 429'da (yerel kova ya da Bedesten) bekleme
+        _RETRY_MAX_S'i aşmıyorsa bekler ve EN ÇOK BİR KEZ yeniden dener."""
+        for deneme in (0, 1):
+            try:
+                bekleme_siniri = self._DEFAULT_MAX_WAIT_S if deneme == 0 else self._RETRY_MAX_S + 1.5
+                await self._bucket.acquire(max_wait=bekleme_siniri)
+            except BedestenRateLimited as e:
+                if deneme == 0 and e.retry_after <= self._RETRY_MAX_S:
+                    logger.info(f"BedestenApiClient: local bucket full on {op}; waiting {e.retry_after:.1f}s and retrying once")
+                    await asyncio.sleep(e.retry_after)
+                    continue
+                raise
+            response = await self.http_client.post(endpoint, json=govde)
+            if response.status_code != 429:
+                return response
+            self._handle_429(response, op)
+            bekle = self._retry_after_saniye(response)
+            if deneme == 0 and bekle is not None and bekle <= self._RETRY_MAX_S:
+                logger.info(f"BedestenApiClient: 429 on {op}; Retry-After {bekle:.1f}s ≤ {self._RETRY_MAX_S:.0f}s, retrying once")
+                continue
+            return response
+        return response
 
     def _handle_429(self, response: httpx.Response, op: str) -> None:
         """Apply back-pressure to the shared bucket based on Retry-After."""
@@ -162,13 +198,7 @@ class BedestenApiClient:
             if not request_dict["data"]["birimAdi"]:  # Remove if empty string
                 del request_dict["data"]["birimAdi"]
             
-            await self._bucket.acquire(max_wait=self._DEFAULT_MAX_WAIT_S)
-            response = await self.http_client.post(
-                self.SEARCH_ENDPOINT,
-                json=request_dict
-            )
-            if response.status_code == 429:
-                self._handle_429(response, "search")
+            response = await self._istek_gonder(self.SEARCH_ENDPOINT, request_dict, "search")
             response.raise_for_status()
             response_json = response.json()
 
@@ -196,13 +226,7 @@ class BedestenApiClient:
             )
             
             # Get document
-            await self._bucket.acquire(max_wait=self._DEFAULT_MAX_WAIT_S)
-            response = await self.http_client.post(
-                self.DOCUMENT_ENDPOINT,
-                json=doc_request.model_dump()
-            )
-            if response.status_code == 429:
-                self._handle_429(response, f"document {document_id}")
+            response = await self._istek_gonder(self.DOCUMENT_ENDPOINT, doc_request.model_dump(), f"document {document_id}")
             response.raise_for_status()
             response_json = response.json()
             doc_response = BedestenDocumentResponse(**response_json)
