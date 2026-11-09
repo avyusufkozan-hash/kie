@@ -1208,6 +1208,17 @@ NOTE: Wildcards (*,?), regex, fuzzy (~) and proximity search are NOT supported."
 
 
 # --- search_bedesten_coklu (yeni araç · 09.11.2026) ---
+def _bedesten_sade_satir(d: dict) -> str:
+    """Arama sonucundaki bir kararı tek satıra indirir: kimlik · daire · E. · K. · tarih."""
+    return " · ".join([
+        str(d.get("documentId") or ""),
+        str(d.get("birimAdi") or ""),
+        "E. " + str(d.get("esasNo") or ""),
+        "K. " + str(d.get("kararNo") or ""),
+        str(d.get("kararTarihiStr") or ""),
+    ])
+
+
 # Var olan search_bedesten_unified AYNEN kalır; bu araç onu ifade başına çağırır
 # (aynı ifade kuralları · aynı hız kovası · sayfa 1 · 10 sonuç).
 @app.tool(
@@ -1232,7 +1243,8 @@ async def search_bedesten_coklu(
     ),
     birimAdi: BirimAdiEnum = Field("ALL", description="Daire süzgeci · search_bedesten_unified ile aynı kısaltmalar (H1-H23, C1-C23, HGK, CGK, D1-D17 …)"),
     kararTarihiStart: str = Field("", description="Start date (ISO 8601 format)"),
-    kararTarihiEnd: str = Field("", description="End date (ISO 8601 format)")
+    kararTarihiEnd: str = Field("", description="End date (ISO 8601 format)"),
+    sade: bool = Field(True, description="true (varsayılan): satır başına bir karar 'kimlik · daire · E. · K. · tarih' (kısa); false: search_bedesten_unified'daki tam alanlar + her kararın bulunduğu ifade numaraları")
 ) -> dict:
     """Birden çok Bedesten arama ifadesini tek çağrıda arar ve kimliğe göre tekilleştirir."""
     temiz: List[str] = []
@@ -1272,12 +1284,23 @@ async def search_bedesten_coklu(
                 kararlar[kimlik]["ifadeler"].append(no)
         ozet.append({"no": no, "ifade": ifade, "karar": len(liste), "yeni": yeni, "toplam": r.get("total_records", 0)})
 
-    sonuc: Dict[str, Any] = {
-        "ifade_sayisi": len(temiz),
-        "tekil_karar": len(sira),
-        "ifadeler": ozet,
-        "decisions": [kararlar[k] for k in sira],
-    }
+    if sade:
+        sonuc: Dict[str, Any] = {
+            "ifade_sayisi": len(temiz),
+            "tekil_karar": len(sira),
+            "ifade_ozeti": "\n".join(
+                f"{o['no']}) {o['ifade']} → " + ("aranamadı (kaynak yoğun)" if o.get("durum") == "yogun"
+                                                   else f"{o['karar']} karar · {o['yeni']} yeni · toplam {o['toplam']}")
+                for o in ozet),
+            "satirlar": "\n".join(_bedesten_sade_satir(kararlar[k]) for k in sira),
+        }
+    else:
+        sonuc = {
+            "ifade_sayisi": len(temiz),
+            "tekil_karar": len(sira),
+            "ifadeler": ozet,
+            "decisions": [kararlar[k] for k in sira],
+        }
     if bos:
         sonuc["bos_ifadeler"] = ("Sonuç vermeyen ifade(ler): " + ", ".join(map(str, bos))
                                  + " — ifade çok dar olabilir; '+' ile zorunlu kılınan terimleri azaltın.")
