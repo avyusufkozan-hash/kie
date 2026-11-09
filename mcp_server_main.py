@@ -266,6 +266,9 @@ from bedesten_mcp_module.models import (
 )
 from bedesten_mcp_module.enums import BirimAdiEnum
 
+# Bedesten hız sınırı (HTTP 429) cevabı · kısa ve Türkçe (⚖ 09.11.2026: üçüncü kişi reklam cümlesi kaldırıldı)
+KIE_YOGUN_MESAJI = "Karar kaynağı yoğun; birkaç saniye sonra yeniden deneyin."
+
 # Semantic Search Module Imports (enabled if any embedding provider is configured)
 from semantic_search.embedder import is_semantic_search_available, is_local_embedding_configured
 SEMANTIC_SEARCH_AVAILABLE = is_semantic_search_available()
@@ -1173,14 +1176,7 @@ NOTE: Wildcards (*,?), regex, fuzzy (~) and proximity search are NOT supported."
             "error": "rate_limit_exceeded",
             "status_code": 429,
             "retry_after": retry_after,
-            "message": (
-                "Bedesten istemci tarafı eşzamanlılık sınırına ulaşıldı "
-                "(yerel token-bucket dolu). Lütfen kısa bir süre bekleyip "
-                "aramayı tekrar deneyin. KİE'nin daha hızlı ve "
-                "profesyonel versiyonunu test etmek için beta sürümüne "
-                "kaydolabilirsiniz: "
-                "https://yargi.betaspacestudio.com"
-            ),
+            "message": KIE_YOGUN_MESAJI,
         }
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
@@ -1195,13 +1191,7 @@ NOTE: Wildcards (*,?), regex, fuzzy (~) and proximity search are NOT supported."
                 "error": "rate_limit_exceeded",
                 "status_code": 429,
                 "retry_after": retry_after,
-                "message": (
-                    "Bedesten API rate limit aşıldı (HTTP 429 Too Many Requests). "
-                    "Lütfen kısa bir süre bekleyip aramayı tekrar deneyin. "
-                    "KİE'nin daha hızlı ve profesyonel versiyonunu test "
-                    "etmek için beta sürümüne kaydolabilirsiniz: "
-                    "https://yargi.betaspacestudio.com"
-                ),
+                "message": KIE_YOGUN_MESAJI,
             }
         logger.exception("Error in tool 'search_bedesten_unified'")
         raise
@@ -1233,15 +1223,7 @@ async def get_bedesten_document_markdown(
     except BedestenRateLimited as e:
         retry_after = f"{e.retry_after:.1f}"
         logger.warning(f"Bedesten local rate-limit bucket full for document {documentId}; retry-after={retry_after}s")
-        message = (
-            "Bedesten istemci tarafı eşzamanlılık sınırına ulaşıldı "
-            "(yerel token-bucket dolu). Lütfen kısa bir süre bekleyip "
-            "belgeyi tekrar talep edin. KİE'nin daha hızlı ve "
-            "profesyonel versiyonunu test etmek için beta sürümüne "
-            "kaydolabilirsiniz: "
-            "https://yargi.betaspacestudio.com "
-            f"Retry-After: {retry_after}"
-        )
+        message = f"{KIE_YOGUN_MESAJI} Retry-After: {retry_after}"
         return BedestenDocumentMarkdown(
             documentId=documentId,
             markdown_content=f"ERROR (rate_limit_exceeded, HTTP 429): {message}",
@@ -1252,13 +1234,7 @@ async def get_bedesten_document_markdown(
         if e.response.status_code == 429:
             retry_after = e.response.headers.get("Retry-After", "")
             logger.warning(f"Bedesten API rate limit (429) for document {documentId}; retry-after={retry_after!r}")
-            message = (
-                "Bedesten API rate limit aşıldı (HTTP 429 Too Many Requests). "
-                "Lütfen kısa bir süre bekleyip belgeyi tekrar talep edin. "
-                "KİE'nin daha hızlı ve profesyonel versiyonunu test "
-                "etmek için beta sürümüne kaydolabilirsiniz: "
-                "https://yargi.betaspacestudio.com"
-            )
+            message = KIE_YOGUN_MESAJI
             if retry_after:
                 message += f" Retry-After: {retry_after}"
             return BedestenDocumentMarkdown(
