@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import time
+from collections import OrderedDict
 from typing import Optional
 
 import httpx
@@ -109,6 +110,11 @@ class BedestenApiClient:
     # bekleme süresi (Retry-After ya da yerel kova) bu sınırı aşarsa yeniden denenmez,
     # yapılandırılmış 429 cevabı eskisi gibi çağırana döner.
     _RETRY_MAX_S = float(os.getenv("BEDESTEN_RETRY_MAX_S", "8.0"))
+    # Tam metin önbelleği: aynı karar tekrar istenince Bedesten'e gidilmez (dışarıdan görünmez).
+    # Yalnız başarılı belgeler saklanır; sınırı aşınca en eski atılır.
+    _ONBELLEK_ADET = int(os.getenv("BEDESTEN_ONBELLEK_ADET", "200"))
+    _ONBELLEK_KRKT = int(os.getenv("BEDESTEN_ONBELLEK_KRKT", "10000000"))
+    _ONBELLEK_SURE_S = float(os.getenv("BEDESTEN_ONBELLEK_SURE_S", "86400"))
 
     def __init__(self, request_timeout: float = 60.0):
         self.http_client = httpx.AsyncClient(
@@ -131,6 +137,34 @@ class BedestenApiClient:
             capacity=self._DEFAULT_CAPACITY,
             refill_per_s=1.0 / self._DEFAULT_REFILL_S,
         )
+        # Süreç içi tam metin önbelleği (09.11.2026): belge kimliği → (zaman, sonuç).
+        self._onbellek: "OrderedDict[str, tuple]" = OrderedDict()
+        self._onbellek_krkt = 0
+
+    def _onbellekten(self, document_id: str) -> Optional[BedestenDocumentMarkdown]:
+        kayit = self._onbellek.get(document_id)
+        if kayit is None:
+            return None
+        zaman, sonuc = kayit
+        if time.monotonic() - zaman >= self._ONBELLEK_SURE_S:
+            self._onbellek.pop(document_id, None)
+            self._onbellek_krkt -= len(sonuc.markdown_content or "")
+            return None
+        self._onbellek.move_to_end(document_id)
+        return sonuc.model_copy()
+
+    def _onbellege_koy(self, document_id: str, sonuc: BedestenDocumentMarkdown) -> None:
+        boy = len(sonuc.markdown_content or "")
+        if self._ONBELLEK_ADET <= 0 or boy == 0 or boy > self._ONBELLEK_KRKT:
+            return
+        eski = self._onbellek.pop(document_id, None)
+        if eski is not None:
+            self._onbellek_krkt -= len(eski[1].markdown_content or "")
+        self._onbellek[document_id] = (time.monotonic(), sonuc.model_copy())
+        self._onbellek_krkt += boy
+        while self._onbellek and (len(self._onbellek) > self._ONBELLEK_ADET or self._onbellek_krkt > self._ONBELLEK_KRKT):
+            _, (_, atilan) = self._onbellek.popitem(last=False)
+            self._onbellek_krkt -= len(atilan.markdown_content or "")
 
     @staticmethod
     def _retry_after_saniye(response: httpx.Response) -> Optional[float]:
@@ -218,6 +252,10 @@ class BedestenApiClient:
         Handles both HTML (text/html) and PDF (application/pdf) content types.
         """
         logger.info(f"BedestenApiClient: Fetching document for markdown conversion (ID: {document_id})")
+        onbellekte = self._onbellekten(document_id)
+        if onbellekte is not None:
+            logger.info(f"BedestenApiClient: document {document_id} served from in-process cache")
+            return onbellekte
         
         try:
             # Prepare request
@@ -269,12 +307,15 @@ class BedestenApiClient:
                 logger.warning(f"Unsupported mime type: {mime_type}")
                 markdown_content = f"Unsupported content type: {mime_type}. Unable to convert to markdown."
             
-            return BedestenDocumentMarkdown(
+            sonuc = BedestenDocumentMarkdown(
                 documentId=document_id,
                 markdown_content=markdown_content,
                 source_url=f"https://mevzuat.adalet.gov.tr/ictihat/{document_id}",
                 mime_type=mime_type
             )
+            if mime_type in ("text/html", "application/pdf") and markdown_content:
+                self._onbellege_koy(document_id, sonuc)
+            return sonuc
             
         except httpx.RequestError as e:
             logger.error(f"BedestenApiClient: HTTP error fetching document {document_id}: {e}")
