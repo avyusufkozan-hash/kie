@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy project metadata first for better Docker layer caching
 COPY pyproject.toml ./
+COPY constraints-2026-08-11.txt ./
 COPY README.md ./
 
 # Copy entry points
@@ -37,7 +38,8 @@ COPY yargitay_mcp_module ./yargitay_mcp_module
 COPY semantic_search ./semantic_search
 
 # Install the package with ASGI extras (uvicorn + starlette)
-RUN pip install --no-cache-dir -e ".[asgi]"
+# Sürümler 11.08.2026 derlemesine sabit (bkz. constraints-2026-08-11.txt başlığı)
+RUN pip install --no-cache-dir -c constraints-2026-08-11.txt -e ".[asgi]"
 
 # Expose port
 EXPOSE 8000
