@@ -268,6 +268,9 @@ from bedesten_mcp_module.enums import BirimAdiEnum
 
 # Bedesten hız sınırı (HTTP 429) cevabı · kısa ve Türkçe (⚖ 09.11.2026: üçüncü kişi reklam cümlesi kaldırıldı)
 KIE_YOGUN_MESAJI = "Karar kaynağı yoğun; birkaç saniye sonra yeniden deneyin."
+# Boş arama cevabı · Türkçe tek cümle + ipucu (09.11.2026)
+KIE_BOS_ARAMA_MESAJI = ("Bu aramada karar bulunamadı; arama ifadesi çok dar olabilir — "
+                        "'+' ile zorunlu kılınan terimleri azaltıp ya da tırnaklı ifadeyi kısaltıp yeniden deneyin.")
 
 # Semantic Search Module Imports (enabled if any embedding provider is configured)
 from semantic_search.embedder import is_semantic_search_available, is_local_embedding_configured
@@ -1150,20 +1153,24 @@ NOTE: Wildcards (*,?), regex, fuzzy (~) and proximity search are NOT supported."
                 "requested_page": pageNumber,
                 "page_size": pageSize,
                 "searched_courts": court_types,
-                "error": "No data returned from Bedesten API"
+                "error": "Karar kaynağı bu arama için sonuç döndürmedi.",
+                "mesaj": KIE_BOS_ARAMA_MESAJI
             }
 
         # Add null safety checks for response.data fields
         emsal_karar_list = response.data.emsalKararList if hasattr(response.data, 'emsalKararList') and response.data.emsalKararList is not None else []
         total_records = response.data.total if hasattr(response.data, 'total') and response.data.total is not None else 0
 
-        return {
+        sonuc = {
             "decisions": [d.model_dump() for d in emsal_karar_list],
             "total_records": total_records,
             "requested_page": pageNumber,
             "page_size": pageSize,
             "searched_courts": court_types
         }
+        if not emsal_karar_list:
+            sonuc["mesaj"] = KIE_BOS_ARAMA_MESAJI
+        return sonuc
     except BedestenRateLimited as e:
         retry_after = f"{e.retry_after:.1f}"
         logger.warning(f"Bedesten local rate-limit bucket full for search; retry-after={retry_after}s")
