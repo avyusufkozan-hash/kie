@@ -1206,6 +1206,86 @@ NOTE: Wildcards (*,?), regex, fuzzy (~) and proximity search are NOT supported."
         logger.exception("Error in tool 'search_bedesten_unified'")
         raise
 
+
+# --- search_bedesten_coklu (yeni araç · 09.11.2026) ---
+# Var olan search_bedesten_unified AYNEN kalır; bu araç onu ifade başına çağırır
+# (aynı ifade kuralları · aynı hız kovası · sayfa 1 · 10 sonuç).
+@app.tool(
+    description=(
+        "Use this to run SEVERAL Bedesten search phrases in ONE call (1-5 phrases) instead of calling "
+        "search_bedesten_unified repeatedly. Each phrase follows exactly the same rules as search_bedesten_unified "
+        "(same operators, page 1, 10 results) and phrases are searched one after another within the upstream rate limit. "
+        "Results are de-duplicated by documentId; phrases that returned nothing are listed on one line."
+    ),
+    annotations={
+        "readOnlyHint": True,
+        "openWorldHint": True,
+        "idempotentHint": True
+    }
+)
+async def search_bedesten_coklu(
+    ctx: Context,
+    ifadeler: List[str] = Field(..., min_length=1, max_length=5, description="1-5 arama ifadesi; her biri search_bedesten_unified'daki phrase kurallarıyla aranır (ör. +\"yoksulluk nafakası\" +\"eşit kusur\")"),
+    court_types: List[BedestenCourtTypeEnum] = Field(
+        default=["YARGITAYKARARI", "DANISTAYKARAR"],
+        description="Court types: YARGITAYKARARI, DANISTAYKARAR, YERELHUKUK, ISTINAFHUKUK, KYB"
+    ),
+    birimAdi: BirimAdiEnum = Field("ALL", description="Daire süzgeci · search_bedesten_unified ile aynı kısaltmalar (H1-H23, C1-C23, HGK, CGK, D1-D17 …)"),
+    kararTarihiStart: str = Field("", description="Start date (ISO 8601 format)"),
+    kararTarihiEnd: str = Field("", description="End date (ISO 8601 format)")
+) -> dict:
+    """Birden çok Bedesten arama ifadesini tek çağrıda arar ve kimliğe göre tekilleştirir."""
+    temiz: List[str] = []
+    for ifade in ifadeler:
+        s = (ifade or "").strip()
+        if s and s not in temiz:
+            temiz.append(s)
+    if not temiz:
+        raise ValueError("En az bir boş olmayan arama ifadesi gerekir.")
+    logger.info(f"Tool 'search_bedesten_coklu' called with {len(temiz)} phrase(s)")
+
+    kararlar: Dict[str, dict] = {}
+    sira: List[str] = []
+    ozet: List[dict] = []
+    bos: List[int] = []
+    yogun: List[int] = []
+    for no, ifade in enumerate(temiz, 1):
+        r = await search_bedesten_unified(
+            ctx, phrase=ifade, court_types=court_types, pageNumber=1, birimAdi=birimAdi,
+            kararTarihiStart=kararTarihiStart, kararTarihiEnd=kararTarihiEnd,
+        )
+        if r.get("status_code") == 429 or r.get("error") == "rate_limit_exceeded":
+            yogun.append(no)
+            ozet.append({"no": no, "ifade": ifade, "karar": 0, "yeni": 0, "toplam": 0, "durum": "yogun"})
+            continue
+        liste = r.get("decisions") or []
+        if not liste:
+            bos.append(no)
+        yeni = 0
+        for d in liste:
+            kimlik = str(d.get("documentId"))
+            if kimlik not in kararlar:
+                kararlar[kimlik] = {**d, "ifadeler": [no]}
+                sira.append(kimlik)
+                yeni += 1
+            elif no not in kararlar[kimlik]["ifadeler"]:
+                kararlar[kimlik]["ifadeler"].append(no)
+        ozet.append({"no": no, "ifade": ifade, "karar": len(liste), "yeni": yeni, "toplam": r.get("total_records", 0)})
+
+    sonuc: Dict[str, Any] = {
+        "ifade_sayisi": len(temiz),
+        "tekil_karar": len(sira),
+        "ifadeler": ozet,
+        "decisions": [kararlar[k] for k in sira],
+    }
+    if bos:
+        sonuc["bos_ifadeler"] = ("Sonuç vermeyen ifade(ler): " + ", ".join(map(str, bos))
+                                 + " — ifade çok dar olabilir; '+' ile zorunlu kılınan terimleri azaltın.")
+    if yogun:
+        sonuc["yogun_ifadeler"] = ("Karar kaynağı yoğun olduğu için aranamayan ifade(ler): " + ", ".join(map(str, yogun))
+                                   + " — birkaç saniye sonra yeniden deneyin.")
+    return sonuc
+
 @app.tool(
     description=(
         "Use this when retrieving full text of a Bedesten search result by documentId. "
