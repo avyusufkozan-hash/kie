@@ -126,8 +126,11 @@ async def t1_reklam(c):
 async def t2_yeniden():
     c, s = sahte_istemci([(429, {"Retry-After": "1"}, {}), (200, {}, ARAMA_200)])
     t = time.monotonic()
-    r = await c.search_documents(arama_istegi())
-    dogrula("2 · 429 (1 sn) → bekle → başarılı · 2 istek", s["n"] == 2 and len(r.data.emsalKararList) == 1 and time.monotonic() - t >= 1.0)
+    try:
+        r = await c.search_documents(arama_istegi())
+        dogrula("2 · 429 (1 sn) → bekle → başarılı · 2 istek", s["n"] == 2 and len(r.data.emsalKararList) == 1 and time.monotonic() - t >= 1.0)
+    except Exception as e:
+        dogrula("2 · 429 (1 sn) → bekle → başarılı · 2 istek (hata: %s)" % type(e).__name__, False)
     c, s = sahte_istemci([(429, {"Retry-After": "30"}, {}), (200, {}, ARAMA_200)])
     try:
         await c.search_documents(arama_istegi())
@@ -151,8 +154,11 @@ async def t2_yeniden():
     c._bucket._tokens = 0.0
     c._DEFAULT_MAX_WAIT_S = 0.1
     t = time.monotonic()
-    await c.get_document_as_markdown("7")
-    dogrula("2 · yerel kova dolu (2 sn) → bekledi → tam metin geldi", s["n"] == 1 and time.monotonic() - t >= 1.5)
+    try:
+        await c.get_document_as_markdown("7")
+        dogrula("2 · yerel kova dolu (2 sn) → bekledi → tam metin geldi", s["n"] == 1 and time.monotonic() - t >= 1.5)
+    except Exception as e:
+        dogrula("2 · yerel kova dolu (2 sn) → bekledi → tam metin geldi (hata: %s)" % type(e).__name__, False)
     c, s = sahte_istemci([(200, {}, BELGE_200)], hizli_kova=False)
     c._bucket = _TokenBucket(capacity=1, refill_per_s=0.05)
     c._bucket._tokens = 0.0
@@ -276,6 +282,11 @@ async def t6_onbellek():
     await c.get_document_as_markdown("1")
     await c.get_document_as_markdown("1")
     dogrula("6 · karakter sınırını aşan belge saklanmaz (2 istek)", s["n"] == 2 and c._onbellek_krkt == 0)
+    desteksiz = {"data": {"content": base64.b64encode(b"x").decode(), "mimeType": "application/msword", "version": 1}, "metadata": {}}
+    c, s = sahte_istemci([(200, {}, desteksiz)])
+    await c.get_document_as_markdown("1")
+    await c.get_document_as_markdown("1")
+    dogrula("6 · desteklenmeyen içerik türü saklanmaz (2 istek)", s["n"] == 2 and len(c._onbellek) == 0)
     c, s = sahte_istemci([(200, {}, BELGE_200)])
     c._ONBELLEK_ADET = 0
     await c.get_document_as_markdown("1")
